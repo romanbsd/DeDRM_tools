@@ -741,10 +741,14 @@ SYM_NAMES = [ 'com.amazon.drm.Envelope@1.0',
               'com.amazon.drm.EncryptedPage@2.0',
               'com.amazon.drm.PlainText@2.0', 'compression_algorithm',
               'com.amazon.drm.Compressed@1.0', 'page_index_table',
+              # Symbols that are not listed here get named "<catalog>-unknown#N" by
+              # importunknown(), which is why a voucher envelope whose version is missing from
+              # this table reads as an unrecognised type instead of as an unsupported version.
               ] + ['com.amazon.drm.VoucherEnvelope@%d.0' % n
                    for n in list(range(2, 29)) + [
                                    9708, 1031, 2069, 9041, 3646,
-                                   6052, 9479, 9888, 4648, 5683]]
+                                   6052, 9479, 9888, 4648, 5683,
+                                   7384, 2746, 3332] + list(range(10001, 11111))]
 
 def addprottable(ion):
     ion.addtocatalog("ProtectedData", 1, SYM_NAMES)
@@ -1341,7 +1345,15 @@ class DrmIonVoucher(object):
 
 
         # i know that version maps to scramble pretty much 1 to 1, but there was precendent where they changed it, so...
-        sharedsecrets = [obfuscate(shared, self.version),obfuscate2(shared, self.version),obfuscate3(shared, self.version),
+        if "V%d" % self.version in OBFUSCATION_TABLE:
+            sharedsecrets = [obfuscate(shared, self.version),obfuscate2(shared, self.version),obfuscate3(shared, self.version)]
+        else:
+            # A version this plugin has no obfuscation for. Reaching here means the voucher uses
+            # a key derivation newer than anything implemented below, so no key can be derived
+            # from it; only the older process_V* schemes are still worth trying.
+            print("No known key obfuscation for voucher version %s" % self.version)
+            sharedsecrets = []
+        sharedsecrets += [
                          process_V9708(shared), process_V1031(shared), process_V2069(shared), process_V9041(shared),
                          process_V3646(shared), process_V6052(shared), process_V9479(shared), process_V9888(shared),
                          process_V4648(shared), process_V5683(shared)]
@@ -1393,9 +1405,11 @@ class DrmIonVoucher(object):
     def parse(self):
         self.envelope.reset()
         _assert(self.envelope.hasnext(), "Envelope is empty")
-        _assert(self.envelope.next() == TID_STRUCT and str.startswith(self.envelope.gettypename(), "com.amazon.drm.VoucherEnvelope@"),
-                "Unknown type encountered in envelope, expected VoucherEnvelope")
-        self.version = int(self.envelope.gettypename().split('@')[1][:-2])
+        _assert(self.envelope.next() == TID_STRUCT, "Envelope is not a struct")
+        typename = self.envelope.gettypename()
+        _assert(str.startswith(typename, "com.amazon.drm.VoucherEnvelope@"),
+                "Unknown type encountered in envelope, expected VoucherEnvelope, got %s" % typename)
+        self.version = int(typename.split('@')[1][:-2])
 
         self.envelope.stepin()
         while self.envelope.hasnext():
